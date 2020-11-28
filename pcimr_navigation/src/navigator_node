@@ -6,6 +6,8 @@ import numpy as np
 import os
 from threading import Lock
 
+import datetime
+
 from std_msgs.msg import String
 from geometry_msgs.msg import Point, Pose, Quaternion
 from nav_msgs.msg import OccupancyGrid, MapMetaData
@@ -141,6 +143,9 @@ class NavigatorNode:
         last_goal = np.array([0, 0])
 
         while not rospy.is_shutdown():
+
+            start_algo = datetime.datetime.now()
+
             if self.robot_pos is None or self.map is None:
                 rospy.sleep(1/rate)
                 continue
@@ -205,9 +210,11 @@ class NavigatorNode:
             self.pub_goal_marker.publish(self.msg_goal_marker)
             self.pub_plan_marker.publish(self.msg_path_marker)
 
+            end_algo = datetime.datetime.now()
+
             # Sleep for a while before publishing new messages. 
             if rate:
-                rospy.sleep(1/rate)
+                rospy.sleep(1 - (end_algo - start_algo).total_seconds())
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <launch>
     <arg name="robot_move_probabilities" default="[0.9, 0.04, 0.04, 0.0, 0.02]"/> 
-    <arg name="rand_ini_pos" default="False"/> 
+    <arg name="rand_ini_pos" default="True"/> 
 
     <node pkg="pcimr_simulation" type="simple_sim_node" name="simple_sim_node" output="screen" respawn="false" respawn_delay="0">
         <rosparam param="robot_move_probabilities" subst_value="True">$(arg robot_move_probabilities)</rosparam> 
@@ -12,4 +12,8 @@
     </node>
 
     <node pkg="rviz" type="rviz" name="rviz" output="screen" args="-d $(find pcimr_simulation)/config/simple-sim.rviz"/>
+
+    <node pkg="pcimr_localization" type="localization_node.py" name="localization_node">
+        <rosparam param="robot_move_probabilities" subst_value="True">$(arg robot_move_probabilities)</rosparam>
+    </node>
 </launch>

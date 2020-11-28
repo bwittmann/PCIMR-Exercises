@@ -6,6 +6,8 @@ import numpy as np
 import os
 from threading import Lock
 
+import datetime
+
 from std_msgs.msg import String
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Point, Pose, Quaternion
@@ -131,17 +133,25 @@ class SimpleSimNode:
         @param rate: The rate at which the topics are published.
         """
         while not rospy.is_shutdown():
+
+            start_algo = datetime.datetime.now()
+            rospy.sleep(0.5)    # in order to publish a scan 0.3 s after the move command
+
             # Update message data
             self.msg_scan.ranges = self.sim.sense()
             self.msg_map = numpy_to_occupancy_grid(self.sim.world, info=self.msg_map.info)
+
+
 
             # Publish messages
             self.pub_scan.publish(self.msg_scan)
             self.pub_map.publish(self.msg_map)
 
+            end_algo = datetime.datetime.now()
+
             # Sleep for a while before publishing new messages. 
             if rate:
-                rospy.sleep(1/rate)
+                rospy.sleep(1 - (end_algo - start_algo).total_seconds())
 
 
 if __name__ == "__main__":
