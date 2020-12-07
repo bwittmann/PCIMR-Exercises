@@ -1,0 +1,15 @@
+
+<launch>
+
+    <arg name="robot_sensing_prob" default="[0.8, 0.1, 0]"/> 
+    <arg name="map_dimensions" default="[20, 20]"/> 
+
+    <node pkg="pcimr_simulation" type="simple_sim_node" name="simple_sim_node">
+    </node>
+
+    <node pkg="pcimr_mapping" type="occu_grid_map_node" name="occu_grid_map_node" output="screen">
+        <rosparam param="robot_sensing_prob" subst_value="True">$(arg robot_sensing_prob)</rosparam>
+        <rosparam param="map_dimensions" subst_value="True">$(arg map_dimensions)</rosparam> 
+    </node>
+
+</launch>

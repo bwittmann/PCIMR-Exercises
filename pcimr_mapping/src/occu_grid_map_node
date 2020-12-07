@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+
+import rospy
+import numpy as np
+
+from threading import Lock
+
+from sensor_msgs.msg import LaserScan
+from geometry_msgs.msg import Point
+from nav_msgs.msg import OccupancyGrid
+
+
+class OccuGridMapAlgo():
+    """
+    Node, containing an implementation of the occupancy grid mapping algorithm.
+    """
+
+    def __init__(self, mode='standard'):
+        """
+        Initializes an instance of the OccuGridMapAlgo class including publishers and subscribers.
+
+        @param mode: Mode used by the _get_sensed_cells method to determine which cells to add to the 
+        sensed cells dictionary. The 'ignore' mode makes no assumptions about cells behind the actually
+        sensed cells.
+        """
+        # Init member variables
+        self.sim_lock = Lock()
+        
+        # Init publishers
+        self.pub_map = rospy.Publisher('/map', OccupancyGrid, queue_size=10)
+
+        # Init subscriptions
+        self.sub_pos = rospy.Subscriber('/robot_pos', Point, self._cb_pos)
+        self.sub_scan = rospy.Subscriber('/scan', LaserScan, self._cb_scan)
+
+        # Init constants
+        self.MAP_HEIGHT, self.MAP_WIDTH = rospy.get_param('~map_dimensions', [20, 20])
+        self.PROB_SENS = rospy.get_param('~robot_sensing_prob', [0.8, 0.1, 0])
+
+        # Setup messages for publishing
+        self.msg_grid = OccupancyGrid()
+        self.msg_grid.header.frame_id = 'map'
+        self.msg_grid.info.map_load_time = rospy.Time.now()
+        self.msg_grid.info.resolution = 1
+        self.msg_grid.info.height = self.MAP_HEIGHT
+        self.msg_grid.info.width = self.MAP_WIDTH
+
+        # Init instance variables
+        self.mode = mode
+        self.ranges = None
+        self.pos = None
+        self.map = None
+
+        # Set numpy print options for demonstration
+        np.set_printoptions(precision=1)
+        np.set_printoptions(suppress=True)
+        np.set_printoptions(linewidth=130)
+
+
+    def _cb_pos(self, msg):
+        """
+        Callback function for retrieving new robot position.
+
+        @param msg: The message containing a Point (x, y, z).
+        """
+        self.sim_lock.acquire()
+        self.pos = (msg.x, msg.y)
+        self.sim_lock.release()
+
+    def _cb_scan(self, msg):
+        """
+        Callback function for retrieving new scan.
+
+        @param msg: The message containing a LaserScan.
+        """
+        self.sim_lock.acquire()
+        self.ranges = msg.ranges
+        self.sim_lock.release()
+
+    def _show_and_pub_map(self):
+        """
+        Method for publishing current probability map on the topic /map and displaying current map
+        in the terminal for demonstration reasons.
+        """
+        current_map = self.map.copy()
+        current_map_prob = self._log_odds_to_prob(current_map)
+
+        # Publish map on topic /map
+        self.msg_grid.data = [int(100 * val) for val in current_map_prob.flatten().tolist()]
+        self.pub_map.publish(self.msg_grid)
+
+        # Display map in terminal for demonstration reasons
+        current_map_prob[int(self.pos[1]), int(self.pos[0])] = 5
+        print('\n', current_map_prob)
+
+
+    def _init_map_log_odds(self):
+        """
+        Method for initializing a map based on log odds.
+        """
+        self.map = np.zeros((self.MAP_HEIGHT, self.MAP_WIDTH))
+
+
+    def _get_sensed_cells(self):
+        """
+        Method that catches cells that are directly or indirectly sensed in the current timestep.
+        Sensing is divided into 2 regions based on the notation of the lecture.
+
+        @return: Returns a dictionary containing all sensed cells where the key is the probability of 
+        the inverse sensor model.
+        """
+        y, x = [int(val) for val in self.pos]   # change x and y due to different representation of np.array
+        xn, yn, xp, yp = [int(val) for val in self.ranges]
+
+        # Sensing region 2
+        if self.mode == 'standard':
+            indirect_sensed_cells = [(x, y + yp + 1), (x, y - yn + 1), (x + xp + 1, y), (x - xn + 1, y)] + \
+               [(x, y + yp - 1), (x, y - yn - 1), (x + xp - 1, y), (x - xn - 1, y)]
+        elif self.mode == 'ignore':
+            # Make no assumption about cells behind sensed cells
+            indirect_sensed_cells = [(x, y + yp - 1), (x, y - yn + 1), (x + xp - 1, y), (x - xn + 1, y)]
+        else:
+            rospy.loginfo("Mode does not exist. Please select either 'standard' or 'ignore'")
+
+        direct_sensed_cells = [(x, y + yp), (x, y - yn), (x + xp, y), (x - xn, y)]
+        indirect_sensed_cells = [(x, y) for x, y in indirect_sensed_cells if x >= 0 and y >=0]
+
+        # Sensing region 1
+        free_space = []
+        for x_vel, y_vel in [(0, 1), (1, 0), (0, -1), (-1, 0)]: # Get cells by moving in all directions
+                count = 1
+                while True:
+                    cell = (x + (x_vel * count), y + (y_vel * count))
+                    if cell in indirect_sensed_cells or cell in direct_sensed_cells:
+                        break
+                    free_space.append(cell)
+                    count += 1
+  
+        return {self.PROB_SENS[0]: direct_sensed_cells, self.PROB_SENS[1]: indirect_sensed_cells, self.PROB_SENS[2]: free_space}
+
+
+    def _update_log_odds(self, prior=0.5):
+        """
+        Method that updates the log odds of each grid element. 
+
+        @param prior: Prior probability of a cell being occupied.
+        """
+        prior = self._get_log_odds(prior)
+        sensed_cells = self._get_sensed_cells()
+        
+        # Update log odds of map
+        for prob, cells in sensed_cells.items():
+            for cell in cells:
+                try:
+                    self.map[cell] = self.map[cell] + self._get_log_odds(prob) - prior
+                except IndexError:
+                    pass
+
+    @staticmethod
+    def _get_log_odds(prob):
+        """
+        Method for calculating log odds based on probabilities.
+        
+        @param prob: scalar, vector or matrix of probabilities (0 - 1).
+        @return: scalar, vector or matrix of log odds.
+        """
+        return np.log(prob / (1- prob))
+
+    @staticmethod
+    def _log_odds_to_prob(log_odds):
+        """
+        Method for calculating probabilities based on log odds.
+        
+        @param log_odds: scalar, vector or matrix of log odds.
+        @return: scalar, vector or matrix of probabilities (0 - 1).
+        """
+        return 1 - 1/(1 + np.exp(log_odds))
+        
+    def run(self):
+        """
+        Main method of the occupancy grid mapping algorithm.
+        """
+        # Initialize the map 
+        self._init_map_log_odds()
+
+        while not rospy.is_shutdown():
+            rospy.wait_for_message('/scan', LaserScan)
+            rospy.sleep(0.3)   # To ensure that also current robot_pos has been published
+
+            self._update_log_odds()
+            self._show_and_pub_map()
+
+
+if __name__ == "__main__":
+    # Create ROS node
+    rospy.init_node('occu_grid_map_algo')
+
+    occu_grid_map_node = OccuGridMapAlgo()
+    occu_grid_map_node.run()
