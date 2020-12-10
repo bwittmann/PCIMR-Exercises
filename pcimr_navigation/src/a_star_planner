@@ -4,7 +4,6 @@ import rospy
 import numpy as np
 from threading import Lock
 
-
 from visualization_msgs.msg import Marker 
 from nav_msgs.msg import OccupancyGrid, Path
 from geometry_msgs.msg import Point, Quaternion, PoseStamped
@@ -51,9 +50,6 @@ class AStarPathPlanner():
         self.msg_goal_marker.color.b = 0.0
         self.msg_goal_marker.pose.orientation = Quaternion(0, 0, 0, 1)
 
-        #self.msg_goal_marker.pose.position.x = self.goal[0]+0.5
-        #self.msg_goal_marker.pose.position.y = self.goal[1]+0.5
-
         self.msg_plan_marker = Marker()
         self.msg_plan_marker.header.frame_id = "map"
         self.msg_plan_marker.ns = "navigation"
@@ -63,12 +59,19 @@ class AStarPathPlanner():
         self.msg_plan_marker.scale.x = 0.3
         self.msg_plan_marker.color.a = 0.5
         self.msg_plan_marker.color.r = 0.0
-        self.msg_plan_marker.color.g = 0.0
-        self.msg_plan_marker.color.b = 1.0
+        self.msg_plan_marker.color.g = 1.0
+        self.msg_plan_marker.color.b = 0.0
         self.msg_plan_marker.pose.orientation = Quaternion(0, 0, 0, 1)
 
-        # how to create line stip
-        #self.msg_plan_marker.points.append(Point..)
+        self.msg_path = Path()
+        self.msg_path.header.frame_id = 'map'
+
+        '''
+        self.msg_pose = PoseStamped()
+        self.msg_pose.header.frame_id = 'map'
+        self.msg_pose.pose.position.z = 0
+        self.msg_pose.pose.orientation = Quaternion(0, 0, 0, 1)
+        '''
 
 
     def _cb_robot_pos(self, msg):
@@ -87,14 +90,13 @@ class AStarPathPlanner():
         self.sim_lock.release()
 
     def _check_goal(self):
-        if self.goal != None and self.goal_cache != self.goal:
+        if self.goal != None:
             if self.map[self.goal[0], self.goal[1]] == 0:
                 rospy.loginfo('Valid goal.')
                 self.is_goal_valid = True
             else:
                 rospy.loginfo('Invalid goal. Please select a new one.')
                 self.is_goal_valid = False
-            self.goal_cache = self.goal
 
 
     class Node():
@@ -114,7 +116,7 @@ class AStarPathPlanner():
             return str(self.pos)
 
 
-    def run_astar(self):
+    def _run_astar(self):
         self.queue = [self.Node(self.robot_pos, None, self.goal, self.robot_pos)]
         self.explored = [self.robot_pos]
 
@@ -137,22 +139,25 @@ class AStarPathPlanner():
                 if self.map[current_node.pos[0], current_node.pos[1] - 1] == 0 and (current_node.pos[0], current_node.pos[1] - 1) not in self.explored:
                     self.explored.append((current_node.pos[0], current_node.pos[1] - 1))
                     self.queue.append(self.Node((current_node.pos[0], current_node.pos[1] - 1), current_node, self.goal, self.robot_pos))
-            except:
+            except IndexError:
                 pass
 
 
+            '''
             print("----------------------")
             print("Current Node :", current_node)
             print("Queue: ", self.queue)
             print("Explored: ", self.explored)
+            '''
 
             if current_node.pos == self.goal:
                 rospy.loginfo('Path between current position and goal found.')
                 path = []
                 while True:
-                    path.append(current_node)
+                    path.append(current_node.pos)
                     current_node = current_node.parent
                     if current_node == None:
+                        print(path[::-1])
                         break
                 break
 
@@ -165,19 +170,46 @@ class AStarPathPlanner():
         return path
 
 
-    def main(self):
+    def main(self, rate=1):
         while not rospy.is_shutdown():
-            self._check_goal()
 
-            if self.is_goal_valid:
-                print('Start: ',self.robot_pos)
-                print('Goal: ', self.goal)
-                path = self.run_astar()
-                print(path)
+            if self.goal != self.goal_cache:
+                self._check_goal()
 
-            
+                if self.is_goal_valid:
+                    print('Start: ',self.robot_pos)
+                    print('Goal: ', self.goal)
+                    path = self._run_astar()
 
-            rospy.sleep(1)
+
+                    # Publish path and goal
+                    self.msg_goal_marker.pose.position.x = self.goal[1] + 0.5
+                    self.msg_goal_marker.pose.position.y = self.goal[0] + 0.5
+                    self.pub_goal.publish(self.msg_goal_marker)
+
+                    self.msg_plan_marker.points.clear()
+                    for cell in path:
+                        self.msg_plan_marker.points.append(Point(cell[1] + 0.5, cell[0] + 0.5, 0))
+                    self.pub_plan.publish(self.msg_plan_marker)
+
+                    self.msg_path.poses.clear()
+                    for cell in path[::-1]:
+                        print(cell)
+                        self.msg_pose = PoseStamped()
+                        self.msg_pose.header.frame_id = 'map'
+                        self.msg_pose.pose.position.z = 0
+                        self.msg_pose.pose.orientation = Quaternion(0, 0, 0, 1)
+                        self.msg_pose.pose.position.x = cell[1] # + 0.5
+                        self.msg_pose.pose.position.y = cell[0] # + 0.5
+                        self.msg_path.poses.append(self.msg_pose)
+                    self.pub_path.publish(self.msg_path)
+
+
+
+            self.goal_cache = self.goal
+
+    
+            rospy.sleep(1/rate)
 
 
 
