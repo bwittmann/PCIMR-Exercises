@@ -10,8 +10,15 @@ from geometry_msgs.msg import Point, Quaternion, PoseStamped
 
 
 class AStarPathPlanner():
+    """
+    Class that implements an A-Star path planner, which can be used as a ROS node for navigation.
+    """
 
     def __init__(self):
+        """
+        Initialisation of an instance of the AStarPathPlanner class, including all its publishers
+        and subscribers.
+        """
         # Initialize constants
         self.HEIGHT = 20
         self.WIDTH = 20
@@ -25,9 +32,9 @@ class AStarPathPlanner():
         self.goal_cache = None
 
         # Initialize Publishers
-        self.pub_path = rospy.Publisher('/global_path', Path, queue_size=10)
+        self.pub_path = rospy.Publisher('/global_path', Path, queue_size=10, latch=True)
         self.pub_goal = rospy.Publisher('/visualization/goal', Marker, queue_size=10)
-        self.pub_plan = rospy.Publisher('/visualization/plan', Marker, queue_size=10) # not too sure about this one
+        self.pub_plan = rospy.Publisher('/visualization/plan', Marker, queue_size=10)
 
         # Initialize Subscribers
         self.sub_map = rospy.Subscriber('/map', OccupancyGrid, self._cb_map)
@@ -66,30 +73,42 @@ class AStarPathPlanner():
         self.msg_path = Path()
         self.msg_path.header.frame_id = 'map'
 
-        '''
-        self.msg_pose = PoseStamped()
-        self.msg_pose.header.frame_id = 'map'
-        self.msg_pose.pose.position.z = 0
-        self.msg_pose.pose.orientation = Quaternion(0, 0, 0, 1)
-        '''
-
 
     def _cb_robot_pos(self, msg):
+        """
+        Callback function for receiving the current robot position.
+
+        @param msg: Message containing a Point describing the robot position (x, y, z).
+        """
         self.sim_lock.acquire()
         self.robot_pos = (int(msg.y) , int(msg.x))
         self.sim_lock.release()
 
     def _cb_map(self, msg):
+        """
+        Callback function for receiving the current map.
+
+        @param msg: Message containing a OccupancyGrid describing the discretized world.
+        """
         self.sim_lock.acquire()
         self.map = np.array(msg.data).reshape(self.HEIGHT, self.WIDTH)
         self.sim_lock.release()
 
     def _cb_goal(self, msg):
+        """
+        Callback function for receiving the current goal position.
+
+        @param msg: Message containing a PoseStamped with position and orientation
+                    of the goal position.
+        """
         self.sim_lock.acquire()
         self.goal = (int(np.floor(msg.pose.position.y)), int(np.floor(msg.pose.position.x)))
         self.sim_lock.release()
 
     def _check_goal(self):
+        """
+        Method for checking if the goal is in the freespace of the map and therefore is valid.
+        """
         if self.goal != None:
             if self.map[self.goal[0], self.goal[1]] == 0:
                 rospy.loginfo('Valid goal.')
@@ -100,56 +119,90 @@ class AStarPathPlanner():
 
 
     class Node():
+        """
+        Class that is necessary for the A-Star algorithm and represents a node that can be used for 
+        graph based path search.
+        """
+
         def __init__(self, pos, parent, goal, start):
+            """
+            Initialization of an instance of the node class.
+            """
             self.pos = pos
             self.parent = parent
             self.val = self._manhattan_distance(self.pos, goal) + self._manhattan_distance(self.pos, start)
 
         @staticmethod
         def _manhattan_distance(pos1, pos2):
+            """
+            Static method used to compute the cost of a node, which represents the Manhattan distance between two
+            positions. 
+            """
             return abs(pos1[1] - pos2[1]) + abs(pos1[0] - pos2[0])
 
         def __gt__(self, other):
+            """
+            Dunder method that allows the use of the '>' comparison operator between two nodes.
+            """
             return self.val > other.val
 
         def __repr__(self):
+            """
+            Dunder method that returns a printable version of an instance.
+            """
             return str(self.pos)
 
 
     def _run_astar(self):
+        """
+        Method to run the A-Star algorithm.
+
+        @return: A list of the shortest path - based on A-Star - between self.goal and self.robot_pos.
+        """
+        # Create lists for the explored nodes (based on position) and for nodes at frontiers
         self.queue = [self.Node(self.robot_pos, None, self.goal, self.robot_pos)]
         self.explored = [self.robot_pos]
 
-        i = 0
-        while i < 200:
-            i += 1
-
+        while True:
+            # Get the node with the smallest cost from the queue
             current_node = self.queue.pop(0)
 
+            # Add surrounding nodes that have not been explored before and are in the free space to the queue and the explored list
             try:
                 if self.map[current_node.pos[0] + 1, current_node.pos[1]] == 0 and (current_node.pos[0] + 1, current_node.pos[1]) not in self.explored:
                     self.explored.append((current_node.pos[0] + 1, current_node.pos[1]))
                     self.queue.append(self.Node((current_node.pos[0] + 1, current_node.pos[1]), current_node, self.goal, self.robot_pos))
+            except IndexError:
+                pass
+
+            try:       
                 if self.map[current_node.pos[0] - 1, current_node.pos[1]] == 0 and (current_node.pos[0] - 1, current_node.pos[1]) not in self.explored:
                     self.explored.append((current_node.pos[0] - 1, current_node.pos[1]))
                     self.queue.append(self.Node((current_node.pos[0] - 1, current_node.pos[1]), current_node, self.goal, self.robot_pos))
+            except IndexError:
+                pass
+
+            try:
                 if self.map[current_node.pos[0], current_node.pos[1] + 1] == 0 and [current_node.pos[0], current_node.pos[1] + 1] not in self.explored:
                     self.explored.append((current_node.pos[0], current_node.pos[1] + 1))
                     self.queue.append(self.Node((current_node.pos[0], current_node.pos[1] + 1), current_node, self.goal, self.robot_pos))
+            except IndexError:
+                pass
+                
+            try:
                 if self.map[current_node.pos[0], current_node.pos[1] - 1] == 0 and (current_node.pos[0], current_node.pos[1] - 1) not in self.explored:
                     self.explored.append((current_node.pos[0], current_node.pos[1] - 1))
                     self.queue.append(self.Node((current_node.pos[0], current_node.pos[1] - 1), current_node, self.goal, self.robot_pos))
             except IndexError:
                 pass
 
-
-            '''
-            print("----------------------")
-            print("Current Node :", current_node)
-            print("Queue: ", self.queue)
-            print("Explored: ", self.explored)
-            '''
-
+            # Additional print statements for demonstration of the underlying processes
+            #print("----------------------")
+            #print("Current Node :", current_node)
+            #print("Queue: ", self.queue)
+            #print("Explored: ", self.explored)
+            
+            # Check if the current node is the goal node
             if current_node.pos == self.goal:
                 rospy.loginfo('Path between current position and goal found.')
                 path = []
@@ -157,30 +210,35 @@ class AStarPathPlanner():
                     path.append(current_node.pos)
                     current_node = current_node.parent
                     if current_node == None:
-                        print(path[::-1])
                         break
                 break
 
+            # Check if the queue is empty, which means that a path could not be found
             if len(self.queue) == 0:
                 rospy.loginfo('Connection between current position and goal not possible.')
                 break
 
+            # Sort the queue to pop the node with the smallest cost in the next iteration
             self.queue.sort()
-
         return path
 
 
     def main(self, rate=1):
+        """
+        Main method, which should be used to run the node and the A-Star algorithm.
+        """
         while not rospy.is_shutdown():
 
+            # Check if the current goal is still the same as an iteration before
             if self.goal != self.goal_cache:
                 self._check_goal()
 
                 if self.is_goal_valid:
                     print('Start: ',self.robot_pos)
                     print('Goal: ', self.goal)
-                    path = self._run_astar()
 
+                    path = self._run_astar()
+                    print(path[::-1])
 
                     # Publish path and goal
                     self.msg_goal_marker.pose.position.x = self.goal[1] + 0.5
@@ -194,7 +252,6 @@ class AStarPathPlanner():
 
                     self.msg_path.poses.clear()
                     for cell in path[::-1]:
-                        print(cell)
                         self.msg_pose = PoseStamped()
                         self.msg_pose.header.frame_id = 'map'
                         self.msg_pose.pose.position.z = 0
@@ -204,17 +261,12 @@ class AStarPathPlanner():
                         self.msg_path.poses.append(self.msg_pose)
                     self.pub_path.publish(self.msg_path)
 
-
-
             self.goal_cache = self.goal
-
-    
             rospy.sleep(1/rate)
 
 
-
-
 if __name__ == "__main__":
+    # Create a node of the A-Star path planner
     rospy.init_node('a_star_planner')
 
     a_star_planner = AStarPathPlanner()
